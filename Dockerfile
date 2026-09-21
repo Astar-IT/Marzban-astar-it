@@ -2,12 +2,15 @@ ARG PYTHON_VERSION=3.12
 # Build version to invalidate cache when code changes
 ARG BUILD_VERSION=20260126-v17
 
-FROM python:$PYTHON_VERSION-slim AS build
+# ============================================================
+# STAGE 1: BUILD
+# ============================================================
+FROM python:${PYTHON_VERSION}-slim AS build
 
 ENV PYTHONUNBUFFERED=1
-
 WORKDIR /code
 
+# Установка зависимостей для сборки (включая libpq-dev для psycopg2)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential curl unzip gcc python3-dev libpq-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -93,20 +96,29 @@ COPY ./requirements.txt /code/
 RUN pip install --no-cache-dir --upgrade pip setuptools \
     && pip install --no-cache-dir --upgrade -r /code/requirements.txt
 
-# Save the actual site-packages path for the next stage
+# Сохраняем точный путь к site-packages текущей версии Python
 RUN python -c "import site; print(site.getsitepackages()[0])" > /tmp/site_packages_path
 
-FROM python:$PYTHON_VERSION-slim
+# ============================================================
+# STAGE 2: RUNTIME
+# ============================================================
+FROM python:${PYTHON_VERSION}-slim
 
 WORKDIR /code
 
-# Install runtime dependencies (libpq for PostgreSQL, openssl for certs, certbot for Let's Encrypt)
+# Установка runtime зависимостей. 
+# ВАЖНО: libpq-dev нужен здесь для корректной работы psycopg2, скопированного из build stage.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libpq5 openssl certbot cron \
+    && apt-get install -y --no-install-recommends libpq5 libpq-dev openssl certbot cron \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Python packages using the correct path
-COPY --from=build /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+# Динамически определяем путь к site-packages и копируем пакеты
+COPY --from=build /tmp/site_packages_path /tmp/site_packages_path
+RUN SITE_PACKAGES=$(cat /tmp/site_packages_path) && \
+    mkdir -p ${SITE_PACKAGES} && \
+    COPY --from=build ${SITE_PACKAGES}/ ${SITE_PACKAGES}/
+
+# Копируем бинарники и конфиги Xray/Hysteria/TUIC/Juicity
 COPY --from=build /usr/local/bin /usr/local/bin
 COPY --from=build /usr/local/share/xray /usr/local/share/xray
 COPY --from=build /usr/local/bin/xray /usr/local/bin/xray
@@ -230,7 +242,7 @@ else
     fi
 fi
 
-# ──────────────────────────────────────────────────
+# ─────────────────────────────────────────────────
 # Reality key management
 # ──────────────────────────────────────────────────
 SAVED_PRIVATE_KEY_FILE="$CERT_DIR/reality_private_key.txt"
@@ -281,7 +293,7 @@ if [ -f "$SAVED_PUBLIC_KEY_FILE" ]; then
     echo "========================================"
 fi
 
-# ──────────────────────────────────────────────────
+# ─────────────────────────────────────────────────
 # Finalize and start
 # ──────────────────────────────────────────────────
 pip install --no-cache-dir 'setuptools==70.3.0' 2>/dev/null || true
