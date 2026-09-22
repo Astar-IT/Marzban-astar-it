@@ -207,18 +207,13 @@ generate_self_signed() {
     echo "Self-signed cert generated. Set SSL_CERT_DOMAIN + mount acme.json for real cert."
 }
 
-# Decide cert strategy
+ Decide cert strategy
 GOT_CERT=0
 if [ -n "$SSL_CERT_DOMAIN" ]; then
-    # 1) Try Coolify/Traefik acme.json (best for Coolify deployments)
     try_acme_extract "$SSL_CERT_DOMAIN" && GOT_CERT=1
-
-    # 2) Fallback to certbot standalone
     if [ "$GOT_CERT" = "0" ]; then
         try_certbot "$SSL_CERT_DOMAIN" "${SSL_CERT_EMAIL:-}" && GOT_CERT=1
     fi
-
-    # 3) Fallback to self-signed
     if [ "$GOT_CERT" = "0" ] && ! cert_is_valid; then
         generate_self_signed
     fi
@@ -229,6 +224,24 @@ else
         echo "Existing valid certificate found."
     fi
 fi
+
+# ══════════════════════════════════════════════════
+# КРИТИЧЕСКИ ВАЖНО: Экспорт для Marzban
+# Без этого Marzban останется на 127.0.0.1
+# ══════════════════════════════════════════════════
+export UVICORN_SSL_CERTFILE="$CERT_FILE"
+export UVICORN_SSL_KEYFILE="$KEY_FILE"
+export UVICORN_HOST="${UVICORN_HOST:-0.0.0.0}"
+export UVICORN_PORT="${UVICORN_PORT:-3000}"
+
+echo ">>> SSL Cert exported: $UVICORN_SSL_CERTFILE"
+echo ">>> Host: $UVICORN_HOST, Port: $UVICORN_PORT"
+# ══════════════════════════════════════════════════
+
+# ──────────────────────────────────────────────────
+# Reality key management
+# ──────────────────────────────────────────────────
+SAVED_PRIVATE_KEY_FILE="$CERT_DIR/reality_private_key.txt"
 
 # ──────────────────────────────────────────────────
 # Reality key management
@@ -292,7 +305,7 @@ if [ "${HYSTERIA2_ENABLED:-true}" = "true" ] && command -v hysteria >/dev/null 2
 fi
 
 alembic upgrade head
-exec python main.py
+exec uvicorn app.main:app --host "$UVICORN_HOST" --port "$UVICORN_PORT"
 EOF
 
 RUN chmod +x /code/entrypoint.sh
