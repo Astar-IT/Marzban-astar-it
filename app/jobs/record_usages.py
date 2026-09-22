@@ -1,8 +1,11 @@
+import json
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from operator import attrgetter
 from typing import Union
+from urllib.error import URLError
+from urllib.request import urlopen
 
 from pymysql.err import OperationalError
 from sqlalchemy import and_, bindparam, insert, select, update
@@ -14,6 +17,8 @@ from app.db import GetDB
 from app.db.models import Admin, NodeUsage, NodeUserUsage, System, User
 from config import (
     DISABLE_RECORDING_NODE_USAGE,
+    HYSTERIA2_ENABLED,
+    HYSTERIA2_TRAFFIC_PORT,
     JOB_RECORD_NODE_USAGES_INTERVAL,
     JOB_RECORD_USER_USAGES_INTERVAL,
 )
@@ -118,6 +123,37 @@ def get_users_stats(api: XRayAPI):
         return []
 
 
+def get_hysteria2_user_stats():
+    """Hysteria2 не пишет статистику в Xray. Берём tx+rx с локального Traffic Stats API.
+
+    id клиента — «{user_id}.{username}», как в /api/hysteria2/auth.
+    tx — байты от клиента, rx — байты к клиенту.
+    """
+    if not HYSTERIA2_ENABLED:
+        return []
+    url = f"http://127.0.0.1:{HYSTERIA2_TRAFFIC_PORT}/traffic?clear=1"
+    try:
+        with urlopen(url, timeout=3) as resp:
+            data = json.load(resp)
+    except (URLError, TimeoutError, OSError, json.JSONDecodeError, ValueError):
+        return []
+    if not isinstance(data, dict):
+        return []
+
+    params = []
+    for client_id, stats in data.items():
+        if not isinstance(stats, dict):
+            continue
+        total = int(stats.get("tx") or 0) + int(stats.get("rx") or 0)
+        if total <= 0:
+            continue
+        uid = str(client_id).split(".", 1)[0]
+        if not uid.isdigit():
+            continue
+        params.append({"uid": uid, "value": total})
+    return params
+
+
 def get_outbounds_stats(api: XRayAPI):
     try:
         params = [{"up": stat.value, "down": 0} if stat.link == "uplink" else {"up": 0, "down": stat.value}
@@ -145,6 +181,8 @@ def record_user_usages():
         coefficient = usage_coefficient.get(node_id, 1)  # get the usage coefficient for the node
         for param in params:
             users_usage[param['uid']] += int(param['value'] * coefficient)  # apply the usage coefficient
+    for param in get_hysteria2_user_stats():
+        users_usage[param["uid"]] += param["value"]
     users_usage = list({"uid": uid, "value": value} for uid, value in users_usage.items())
     if not users_usage:
         return

@@ -102,10 +102,15 @@ def generate_subscription(
         config_format: Literal["v2ray", "clash-meta", "clash", "sing-box", "outline", "v2ray-json"],
         as_base64: bool,
         reverse: bool,
+        ru_whitelist_mode: bool = False,
 ) -> str:
+    inbounds = user.inbounds
+    if ru_whitelist_mode:
+        inbounds = filter_ru_whitelist_inbounds(inbounds)
+
     kwargs = {
         "proxies": user.proxies,
-        "inbounds": user.inbounds,
+        "inbounds": inbounds,
         "extra_data": user.__dict__,
         "reverse": reverse,
     }
@@ -129,6 +134,31 @@ def generate_subscription(
         config = base64.b64encode(config.encode()).decode()
 
     return config
+
+
+def filter_ru_whitelist_inbounds(inbounds: dict) -> dict:
+    allowed = {}
+    blocked_protocols = {"hysteria2", "tuic", "juicity"}
+    blocked_networks = {"quic", "hysteria2"}
+
+    for protocol, tags in inbounds.items():
+        protocol_value = getattr(protocol, "value", protocol)
+        if protocol_value in blocked_protocols:
+            continue
+
+        filtered_tags = []
+        for tag in tags:
+            inbound = xray.config.inbounds_by_tag.get(tag)
+            if not inbound:
+                continue
+            if inbound.get("network") in blocked_networks:
+                continue
+            filtered_tags.append(tag)
+
+        if filtered_tags:
+            allowed[protocol] = filtered_tags
+
+    return allowed
 
 
 def format_time_left(seconds_left: int) -> str:
@@ -272,19 +302,18 @@ def process_inbounds_and_tags(
             format_variables.update({"TRANSPORT": inbound["network"]})
             host_inbound = inbound.copy()
             hosts_list = xray.hosts.get(tag, [])
-            # Fallback for virtual inbounds (hysteria2, tuic, juicity) without hosts
-            if not hosts_list and inbound["protocol"] in ("hysteria2", "tuic", "juicity"):
+            if not hosts_list:
                 hosts_list = [{
-                    "remark": f"{inbound['protocol'].title()}",
+                    "remark": "🚀 Marz ({USERNAME}) [{PROTOCOL} - {TRANSPORT}]",
                     "address": [format_variables["SERVER_IP"]],
                     "port": inbound["port"],
                     "path": None,
                     "sni": inbound.get("sni") or [],
                     "host": inbound.get("host") or [],
                     "alpn": None,
-                    "fingerprint": "",
+                    "fingerprint": inbound.get("fp") or "",
                     "tls": None,
-                    "allowinsecure": "",
+                    "allowinsecure": None,
                     "mux_enable": None,
                     "fragment_setting": None,
                     "noise_setting": None,
@@ -321,17 +350,24 @@ def process_inbounds_and_tags(
                 if host.get("use_sni_as_host", False) and sni:
                     req_host = sni
 
+                tls_mode = inbound["tls"] if host["tls"] is None else host["tls"]
+                # Самоподписанный CN=marzban без IP SAN. NULL в hosts = не задано,
+                # для TLS ставим insecure, иначе NekoBox/sing-box рвёт handshake.
+                if host.get("allowinsecure") in (None, ""):
+                    ais = tls_mode == "tls"
+                else:
+                    ais = bool(host["allowinsecure"]) or inbound.get("allowinsecure", "")
+
                 host_inbound.update(
                     {
                         "port": host["port"] or inbound["port"],
                         "sni": sni,
                         "host": req_host,
-                        "tls": inbound["tls"] if host["tls"] is None else host["tls"],
+                        "tls": tls_mode,
                         "alpn": host["alpn"] if host["alpn"] else None,
                         "path": path,
                         "fp": host["fingerprint"] or inbound.get("fp", ""),
-                        "ais": host["allowinsecure"]
-                        or inbound.get("allowinsecure", ""),
+                        "ais": ais,
                         "mux_enable": host["mux_enable"],
                         "fragment_setting": host["fragment_setting"],
                         "noise_setting": host["noise_setting"],

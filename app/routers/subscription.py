@@ -25,11 +25,15 @@ from config import (
 client_config = {
     "clash-meta": {"config_format": "clash-meta", "media_type": "text/yaml", "as_base64": False, "reverse": False},
     "sing-box": {"config_format": "sing-box", "media_type": "application/json", "as_base64": False, "reverse": False},
+    "ru-sing-box": {"config_format": "sing-box", "media_type": "application/json", "as_base64": False, "reverse": False, "ru_whitelist_mode": True},
     "clash": {"config_format": "clash", "media_type": "text/yaml", "as_base64": False, "reverse": False},
     "v2ray": {"config_format": "v2ray", "media_type": "text/plain", "as_base64": True, "reverse": False},
+    "ru-v2ray": {"config_format": "v2ray", "media_type": "text/plain", "as_base64": True, "reverse": False, "ru_whitelist_mode": True},
     "outline": {"config_format": "outline", "media_type": "application/json", "as_base64": False, "reverse": False},
     "v2ray-json": {"config_format": "v2ray-json", "media_type": "application/json", "as_base64": False,
-                   "reverse": False}
+                   "reverse": False},
+    "ru-v2ray-json": {"config_format": "v2ray-json", "media_type": "application/json", "as_base64": False,
+                      "reverse": False, "ru_whitelist_mode": True}
 }
 
 router = APIRouter(tags=['Subscription'], prefix=f'/{XRAY_SUBSCRIPTION_PATH}')
@@ -45,9 +49,17 @@ _PROXY_CLIENT_SUBSTRINGS = (
     "flclash",
     "v2rayn",
     "v2rayng",
-    "streissand",
+    "streisand",
     "hiddify",
-    "happ/",
+    "happ",
+    "shadowrocket",
+    "v2box",
+    "foxray",
+    "quantumult",
+    "surge",
+    "loon",
+    "pharos",
+    "onexray",
     "shadowsocks",
     "ssconf",
     "sssub",
@@ -57,6 +69,7 @@ _PROXY_CLIENT_SUBSTRINGS = (
     "sft/",
     "karing",
     "outline",
+    "cfnetwork",
 )
 
 
@@ -101,17 +114,22 @@ def user_subscription(
         )
     }
 
-    is_proxy_client = _user_agent_looks_like_proxy_client(user_agent)
-
-    if not is_proxy_client:
-        accept_header = request.headers.get("Accept", "")
-        if "text/html" in accept_header:
-            return HTMLResponse(
-                render_template(
-                    SUBSCRIPTION_PAGE_TEMPLATE,
-                    {"user": user}
-                )
+    accept_header = request.headers.get("Accept", "")
+    ua_lower = (user_agent or "").lower()
+    # HTML только браузеру. iOS-приложения (Streisand, Happ, Shadowrocket, V2Box)
+    # часто шлют Accept: text/html и получают страницу вместо подписки — импорт пустой.
+    is_browser = (
+        "mozilla" in ua_lower
+        and not _user_agent_looks_like_proxy_client(user_agent)
+        and "cfnetwork" not in ua_lower
+    )
+    if is_browser and "text/html" in accept_header:
+        return HTMLResponse(
+            render_template(
+                SUBSCRIPTION_PAGE_TEMPLATE,
+                {"user": user}
             )
+        )
 
     if re.match(r'^([Cc]lash-verge|[Cc]lash[-\.]?[Mm]eta|[Ff][Ll][Cc]lash|[Mm]ihomo)', user_agent):
         conf = generate_subscription(user=user, config_format="clash-meta", as_base64=False, reverse=False)
@@ -209,7 +227,7 @@ def user_get_usage(
 def user_subscription_with_client_type(
     request: Request,
     dbuser: UserResponse = Depends(get_validated_sub),
-    client_type: str = Path(..., regex="sing-box|clash-meta|clash|outline|v2ray|v2ray-json"),
+    client_type: str = Path(..., regex="sing-box|ru-sing-box|clash-meta|clash|outline|v2ray|ru-v2ray|v2ray-json|ru-v2ray-json"),
     db: Session = Depends(get_db),
     user_agent: str = Header(default="")
 ):
@@ -232,6 +250,7 @@ def user_subscription_with_client_type(
     conf = generate_subscription(user=user,
                                  config_format=config["config_format"],
                                  as_base64=config["as_base64"],
-                                 reverse=config["reverse"])
+                                 reverse=config["reverse"],
+                                 ru_whitelist_mode=config.get("ru_whitelist_mode", False))
 
     return Response(content=conf, media_type=config["media_type"], headers=response_headers)

@@ -177,7 +177,7 @@ if [ -f "$XRAY_CONFIG" ] && grep -q "YOUR_PRIVATE_KEY_HERE" "$XRAY_CONFIG"; then
         echo "Generating new Reality keys..."
         KEYS=$(xray x25519 2>&1) || true
         PRIVATE_KEY=$(echo "$KEYS" | grep -i "private" | awk -F': ' '{print $2}' | tr -d '[:space:]')
-        PUBLIC_KEY=$(echo "$KEYS" | sed -n '2p' | awk -F': ' '{print $2}' | tr -d '[:space:]')
+        PUBLIC_KEY=$(echo "$KEYS" | grep -iE 'Password|Public key' | head -n1 | awk -F': ' '{print $2}' | tr -d '[:space:]')
         if [ -n "$PRIVATE_KEY" ] && [ -n "$PUBLIC_KEY" ]; then
             sed -i "s/YOUR_PRIVATE_KEY_HERE/$PRIVATE_KEY/g" "$XRAY_CONFIG"
             echo "$PRIVATE_KEY" > "$SAVED_PRIVATE_KEY_FILE"

@@ -6,6 +6,7 @@ from config import (
     HYSTERIA2_OBFS_PASSWORD,
     HYSTERIA2_PORT,
     HYSTERIA2_UP_MBPS,
+    HYSTERIA2_TRAFFIC_PORT,
     UVICORN_PORT,
 )
 
@@ -26,6 +27,9 @@ def generate_hysteria2_config(
                 "url": f"http://127.0.0.1:{UVICORN_PORT}/api/hysteria2/auth",
                 "insecure": True,
             },
+        },
+        "trafficStats": {
+            "listen": f"127.0.0.1:{HYSTERIA2_TRAFFIC_PORT}",
         },
         "bandwidth": {
             "up": f"{HYSTERIA2_UP_MBPS} mbps",

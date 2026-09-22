@@ -10,6 +10,7 @@ def main():
     masq = os.environ.get("HYSTERIA2_MASQUERADE_URL", "https://www.bing.com")
     up_mbps = int(os.environ.get("HYSTERIA2_UP_MBPS", "100"))
     down_mbps = int(os.environ.get("HYSTERIA2_DOWN_MBPS", "100"))
+    traffic_port = int(os.environ.get("HYSTERIA2_TRAFFIC_PORT", "9999"))
     cert = "/var/lib/marzban/certs/fullchain.pem"
     key = "/var/lib/marzban/certs/privkey.pem"
     out_path = "/var/lib/marzban/hysteria2.json"
@@ -25,6 +26,7 @@ def main():
             },
         },
         "bandwidth": {"up": f"{up_mbps} mbps", "down": f"{down_mbps} mbps"},
+        "trafficStats": {"listen": f"127.0.0.1:{traffic_port}"},
         "masquerade": {
             "type": "proxy",
             "proxy": {"url": masq, "rewriteHost": True},

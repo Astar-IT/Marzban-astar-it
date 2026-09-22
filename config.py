@@ -149,6 +149,7 @@ HYSTERIA2_UP_MBPS = config("HYSTERIA2_UP_MBPS", cast=int, default=100)
 HYSTERIA2_DOWN_MBPS = config("HYSTERIA2_DOWN_MBPS", cast=int, default=100)
 HYSTERIA2_MASQUERADE_URL = config("HYSTERIA2_MASQUERADE_URL", default="https://www.bing.com")
 HYSTERIA2_EXECUTABLE_PATH = config("HYSTERIA2_EXECUTABLE_PATH", default="/usr/local/bin/hysteria")
+HYSTERIA2_TRAFFIC_PORT = config("HYSTERIA2_TRAFFIC_PORT", cast=int, default=9999)
 
 # TUIC settings
 TUIC_ENABLED = config("TUIC_ENABLED", default=True, cast=bool)
