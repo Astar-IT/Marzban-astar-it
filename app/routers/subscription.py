@@ -139,17 +139,21 @@ def user_subscription(
         conf = generate_subscription(user=user, config_format="clash", as_base64=False, reverse=False)
         return Response(content=conf, media_type="text/yaml", headers=response_headers)
 
+    elif re.search(r"(?i)NekoBox", user_agent) and "android" not in ua_lower:
+        # Десктоп: UA «NekoBox/x (Prefer ClashMeta Format)». Sing-box он не разбирает — группа пустая.
+        if "clash" in ua_lower:
+            conf = generate_subscription(user=user, config_format="clash-meta", as_base64=False, reverse=False)
+            return Response(content=conf, media_type="text/yaml", headers=response_headers)
+        conf = generate_subscription(user=user, config_format="v2ray", as_base64=True, reverse=False)
+        return Response(content=conf, media_type="text/plain", headers=response_headers)
+
     elif (
         re.search(r"(?i)(SFA|SFI|SFM|SFT|Karing|HiddifyNext)", user_agent)
         or (
             re.search(r"(?i)NekoBox", user_agent)
-            and (
-                "Android" in user_agent
-                or user_agent.lstrip().lower().startswith("nekobox")
-            )
+            and "android" in ua_lower
         )
     ):
-        # Desktop NekoBox: Qt + Mozilla/... NekoBox/1.x — no Android → v2ray branch (share links).
         conf = generate_subscription(user=user, config_format="sing-box", as_base64=False, reverse=False)
         return Response(content=conf, media_type="application/json", headers=response_headers)
 
