@@ -125,7 +125,6 @@ RUN ln -s /code/marzban-cli.py /usr/bin/marzban-cli \
     && chmod +x /usr/bin/marzban-cli
 
 # Startup script that generates certs and Reality keys if needed
-
 COPY <<'EOF' /code/entrypoint.sh
 #!/bin/bash
 set -e
@@ -137,10 +136,8 @@ XRAY_CONFIG="/code/xray_config.json"
 
 mkdir -p "$CERT_DIR"
 
-# ──────────────────────────────────────────────
-# 1. Самоподписанный сертификат (только для Xray inbounds)
-#    Для dashboard он НЕ нужен — HTTPS терминирует Traefik/Coolify.
-# ──────────────────────────────────────────────
+# Самоподписант нужен ТОЛЬКО Xray inbounds (файлы на диске).
+# Для uvicorn/dashboard он НЕ используется — HTTPS терминирует Traefik снаружи.
 if [ ! -f "$CERT_FILE" ] || [ ! -f "$KEY_FILE" ]; then
     echo "Generating self-signed TLS certificate for Xray inbounds..."
     openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
@@ -149,12 +146,8 @@ if [ ! -f "$CERT_FILE" ] || [ ! -f "$KEY_FILE" ]; then
         -subj "/CN=marzban" >/dev/null 2>&1
 fi
 
-# ──────────────────────────────────────────────
-# 2. КРИТИЧЕСКИ ВАЖНО: экспорт переменных для Marzban
-#    Без UVICORN_SSL_* приложение форсирует 127.0.0.1.
-# ──────────────────────────────────────────────
-export UVICORN_SSL_CERTFILE="$CERT_FILE"
-export UVICORN_SSL_KEYFILE="$KEY_FILE"
+# ВАЖНО: НЕ экспортируем UVICORN_SSL_CERTFILE/KEYFILE.
+# Иначе uvicorn включает TLS внутри контейнера, а Traefik ходит по HTTP -> 502.
 export UVICORN_HOST="${UVICORN_HOST:-0.0.0.0}"
 export UVICORN_PORT="${UVICORN_PORT:-3000}"
 
@@ -162,13 +155,10 @@ echo "========================================"
 echo "Marzban startup config:"
 echo "  UVICORN_HOST=$UVICORN_HOST"
 echo "  UVICORN_PORT=$UVICORN_PORT"
-echo "  SSL_CERT=$UVICORN_SSL_CERTFILE"
-echo "  SSL_KEY=$UVICORN_SSL_KEYFILE"
+echo "  (backend = HTTP, TLS terminated by Traefik)"
 echo "========================================"
 
-# ──────────────────────────────────────────────
-# 3. Reality ключи (если в конфиге плейсхолдер)
-# ──────────────────────────────────────────────
+# Reality ключи
 SAVED_PRIVATE_KEY_FILE="$CERT_DIR/reality_private_key.txt"
 SAVED_PUBLIC_KEY_FILE="$CERT_DIR/reality_public_key.txt"
 
@@ -184,7 +174,6 @@ if [ -f "$XRAY_CONFIG" ] && grep -q "YOUR_PRIVATE_KEY_HERE" "$XRAY_CONFIG"; then
         KEYS=$(xray x25519 2>&1) || true
         PRIVATE_KEY=$(echo "$KEYS" | grep -i "private" | awk -F': ' '{print $2}' | tr -d '[:space:]')
         PUBLIC_KEY=$(echo "$KEYS" | sed -n '2p' | awk -F': ' '{print $2}' | tr -d '[:space:]')
-
         if [ -n "$PRIVATE_KEY" ] && [ -n "$PUBLIC_KEY" ]; then
             sed -i "s/YOUR_PRIVATE_KEY_HERE/$PRIVATE_KEY/g" "$XRAY_CONFIG"
             echo "$PRIVATE_KEY" > "$SAVED_PRIVATE_KEY_FILE"
@@ -198,9 +187,7 @@ if [ -f "$XRAY_CONFIG" ] && grep -q "YOUR_PRIVATE_KEY_HERE" "$XRAY_CONFIG"; then
     fi
 fi
 
-# ──────────────────────────────────────────────
-# 4. Hysteria2 конфиг (если включён)
-# ──────────────────────────────────────────────
+# Hysteria2 конфиг
 if [ "${HYSTERIA2_ENABLED:-true}" = "true" ] && command -v hysteria >/dev/null 2>&1; then
     if [ -f /code/scripts/generate_hysteria2_config.py ]; then
         echo "Generating Hysteria2 config..."
@@ -208,18 +195,11 @@ if [ "${HYSTERIA2_ENABLED:-true}" = "true" ] && command -v hysteria >/dev/null 2
     fi
 fi
 
-# ──────────────────────────────────────────────
-# 5. Миграции БД
-# ──────────────────────────────────────────────
 echo "Running alembic migrations..."
 alembic upgrade head
 
-# ──────────────────────────────────────────────
-# 6. Запуск uvicorn НАПРЯМУЮ (HTTP, SSL снаружи от Traefik)
-#    Минуем main.py как __main__, чтобы обойти проверку
-#    "нет SSL -> только localhost".
-# ──────────────────────────────────────────────
-echo "Starting Uvicorn on $UVICORN_HOST:$UVICORN_PORT ..."
+# Запуск БЕЗ SSL-флагов и БЕЗ SSL-env -> чистый HTTP на 0.0.0.0
+echo "Starting Uvicorn on http://$UVICORN_HOST:$UVICORN_PORT ..."
 exec uvicorn main:app --host "$UVICORN_HOST" --port "$UVICORN_PORT"
 EOF
 
