@@ -125,6 +125,7 @@ RUN ln -s /code/marzban-cli.py /usr/bin/marzban-cli \
     && chmod +x /usr/bin/marzban-cli
 
 # Startup script that generates certs and Reality keys if needed
+
 COPY <<'EOF' /code/entrypoint.sh
 #!/bin/bash
 set -e
@@ -136,133 +137,50 @@ XRAY_CONFIG="/code/xray_config.json"
 
 mkdir -p "$CERT_DIR"
 
-# ──────────────────────────────────────────────────
-# TLS Certificate management
-# Priority: Coolify/Traefik acme.json > certbot > existing valid cert > self-signed
-# ──────────────────────────────────────────────────
-ACME_JSON="${TRAEFIK_ACME_JSON:-/etc/traefik/acme.json}"
-
-cert_is_valid() {
-    [ -f "$CERT_FILE" ] && [ -f "$KEY_FILE" ] && \
-    openssl x509 -in "$CERT_FILE" -noout -checkend 86400 2>/dev/null
-}
-
-try_acme_extract() {
-    local domain="$1"
-    if [ -z "$domain" ] || [ ! -f "$ACME_JSON" ]; then
-        return 1
-    fi
-    echo "========================================"
-    echo "Extracting certificate for $domain from Coolify/Traefik..."
-    echo "========================================"
-    python /code/scripts/extract_traefik_cert.py \
-        "$domain" "$ACME_JSON" "$CERT_FILE" "$KEY_FILE" 2>&1
-    return $?
-}
-
-try_certbot() {
-    local domain="$1"
-    local email="$2"
-    local le_live="/etc/letsencrypt/live/$domain"
-    [ -z "$domain" ] && return 1
-    command -v certbot >/dev/null 2>&1 || return 1
-
-    local email_arg="--register-unsafely-without-email"
-    [ -n "$email" ] && email_arg="--email $email"
-
-    echo "========================================"
-    echo "Obtaining Let's Encrypt certificate for $domain ..."
-    echo "========================================"
-    certbot certonly --standalone --preferred-challenges http \
-        --http-01-port "${SSL_HTTP_PORT:-80}" \
-        --non-interactive --agree-tos $email_arg \
-        -d "$domain" --cert-name "$domain" --keep-until-expiring \
-        2>&1 && LE_OK=1 || LE_OK=0
-
-    if [ "$LE_OK" = "1" ] && [ -f "$le_live/fullchain.pem" ]; then
-        cp "$le_live/fullchain.pem" "$CERT_FILE"
-        cp "$le_live/privkey.pem" "$KEY_FILE"
-        echo "Let's Encrypt certificate installed!"
-        echo "0 3 * * * certbot renew --quiet --http-01-port ${SSL_HTTP_PORT:-80} --deploy-hook \"cp '$le_live/fullchain.pem' '$CERT_FILE' && cp '$le_live/privkey.pem' '$KEY_FILE'\"" \
-            > /etc/cron.d/certbot-renew
-        chmod 0644 /etc/cron.d/certbot-renew
-        cron
-        return 0
-    fi
-    echo "WARNING: certbot failed."
-    return 1
-}
-
-generate_self_signed() {
-    echo "========================================"
-    echo "Generating self-signed TLS certificate..."
-    echo "========================================"
-    local san="DNS:localhost,IP:127.0.0.1"
-    [ -n "$SSL_CERT_DOMAIN" ] && san="DNS:$SSL_CERT_DOMAIN,$san"
-    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
-        -sha256 -days 3650 -nodes \
-        -keyout "$KEY_FILE" -out "$CERT_FILE" \
-        -subj "/CN=${SSL_CERT_DOMAIN:-marzban}" \
-        -addext "subjectAltName=$san"
-    echo "Self-signed cert generated. Set SSL_CERT_DOMAIN + mount acme.json for real cert."
-}
-
- Decide cert strategy
-GOT_CERT=0
-if [ -n "$SSL_CERT_DOMAIN" ]; then
-    try_acme_extract "$SSL_CERT_DOMAIN" && GOT_CERT=1
-    if [ "$GOT_CERT" = "0" ]; then
-        try_certbot "$SSL_CERT_DOMAIN" "${SSL_CERT_EMAIL:-}" && GOT_CERT=1
-    fi
-    if [ "$GOT_CERT" = "0" ] && ! cert_is_valid; then
-        generate_self_signed
-    fi
-else
-    if ! cert_is_valid; then
-        generate_self_signed
-    else
-        echo "Existing valid certificate found."
-    fi
+# ──────────────────────────────────────────────
+# 1. Самоподписанный сертификат (только для Xray inbounds)
+#    Для dashboard он НЕ нужен — HTTPS терминирует Traefik/Coolify.
+# ──────────────────────────────────────────────
+if [ ! -f "$CERT_FILE" ] || [ ! -f "$KEY_FILE" ]; then
+    echo "Generating self-signed TLS certificate for Xray inbounds..."
+    openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
+        -keyout "$KEY_FILE" \
+        -out "$CERT_FILE" \
+        -subj "/CN=marzban" >/dev/null 2>&1
 fi
 
-# ══════════════════════════════════════════════════
-# КРИТИЧЕСКИ ВАЖНО: Экспорт для Marzban
-# Без этого Marzban останется на 127.0.0.1
-# ══════════════════════════════════════════════════
+# ──────────────────────────────────────────────
+# 2. КРИТИЧЕСКИ ВАЖНО: экспорт переменных для Marzban
+#    Без UVICORN_SSL_* приложение форсирует 127.0.0.1.
+# ──────────────────────────────────────────────
 export UVICORN_SSL_CERTFILE="$CERT_FILE"
 export UVICORN_SSL_KEYFILE="$KEY_FILE"
 export UVICORN_HOST="${UVICORN_HOST:-0.0.0.0}"
 export UVICORN_PORT="${UVICORN_PORT:-3000}"
 
-echo ">>> SSL Cert exported: $UVICORN_SSL_CERTFILE"
-echo ">>> Host: $UVICORN_HOST, Port: $UVICORN_PORT"
-# ══════════════════════════════════════════════════
+echo "========================================"
+echo "Marzban startup config:"
+echo "  UVICORN_HOST=$UVICORN_HOST"
+echo "  UVICORN_PORT=$UVICORN_PORT"
+echo "  SSL_CERT=$UVICORN_SSL_CERTFILE"
+echo "  SSL_KEY=$UVICORN_SSL_KEYFILE"
+echo "========================================"
 
-# ──────────────────────────────────────────────────
-# Reality key management
-# ──────────────────────────────────────────────────
-SAVED_PRIVATE_KEY_FILE="$CERT_DIR/reality_private_key.txt"
-
-# ──────────────────────────────────────────────────
-# Reality key management
-# ──────────────────────────────────────────────────
+# ──────────────────────────────────────────────
+# 3. Reality ключи (если в конфиге плейсхолдер)
+# ──────────────────────────────────────────────
 SAVED_PRIVATE_KEY_FILE="$CERT_DIR/reality_private_key.txt"
 SAVED_PUBLIC_KEY_FILE="$CERT_DIR/reality_public_key.txt"
 
-if grep -q "YOUR_PRIVATE_KEY_HERE" "$XRAY_CONFIG"; then
+if [ -f "$XRAY_CONFIG" ] && grep -q "YOUR_PRIVATE_KEY_HERE" "$XRAY_CONFIG"; then
     if [ -f "$SAVED_PRIVATE_KEY_FILE" ] && [ -f "$SAVED_PUBLIC_KEY_FILE" ]; then
-        echo "========================================"
         echo "Restoring saved Reality keys..."
         PRIVATE_KEY=$(cat "$SAVED_PRIVATE_KEY_FILE")
         PUBLIC_KEY=$(cat "$SAVED_PUBLIC_KEY_FILE")
         sed -i "s/YOUR_PRIVATE_KEY_HERE/$PRIVATE_KEY/g" "$XRAY_CONFIG"
-        echo "Reality keys restored from previous run!"
-        echo "Public key (for clients): $PUBLIC_KEY"
-        echo "========================================"
+        echo "Reality keys restored. Public key: $PUBLIC_KEY"
     else
-        echo "========================================"
         echo "Generating new Reality keys..."
-        echo "========================================"
         KEYS=$(xray x25519 2>&1) || true
         PRIVATE_KEY=$(echo "$KEYS" | grep -i "private" | awk -F': ' '{print $2}' | tr -d '[:space:]')
         PUBLIC_KEY=$(echo "$KEYS" | sed -n '2p' | awk -F': ' '{print $2}' | tr -d '[:space:]')
@@ -271,43 +189,39 @@ if grep -q "YOUR_PRIVATE_KEY_HERE" "$XRAY_CONFIG"; then
             sed -i "s/YOUR_PRIVATE_KEY_HERE/$PRIVATE_KEY/g" "$XRAY_CONFIG"
             echo "$PRIVATE_KEY" > "$SAVED_PRIVATE_KEY_FILE"
             echo "$PUBLIC_KEY" > "$SAVED_PUBLIC_KEY_FILE"
-            echo "Reality keys generated and saved!"
-            echo "Private key: $PRIVATE_KEY"
-            echo "Public key (for clients): $PUBLIC_KEY"
-            echo ""
             echo "=========================================="
-            echo "SAVE THIS PUBLIC KEY for client configuration!"
+            echo "Reality Public Key (для клиентов): $PUBLIC_KEY"
             echo "=========================================="
         else
             echo "ERROR: Failed to generate Reality keys!"
         fi
-        echo "========================================"
     fi
 fi
 
-sed -i '/"publicKey"/d' "$XRAY_CONFIG" 2>/dev/null || true
-
-if [ -f "$SAVED_PUBLIC_KEY_FILE" ]; then
-    echo "========================================"
-    echo "Reality Public Key for clients:"
-    cat "$SAVED_PUBLIC_KEY_FILE"
-    echo "========================================"
-fi
-
-# ──────────────────────────────────────────────────
-# Finalize and start
-# ──────────────────────────────────────────────────
-pip install --no-cache-dir 'setuptools==70.3.0' 2>/dev/null || true
-
+# ──────────────────────────────────────────────
+# 4. Hysteria2 конфиг (если включён)
+# ──────────────────────────────────────────────
 if [ "${HYSTERIA2_ENABLED:-true}" = "true" ] && command -v hysteria >/dev/null 2>&1; then
-    echo "Generating Hysteria2 config..."
-    python /code/scripts/generate_hysteria2_config.py 2>&1 || echo "WARNING: Failed to generate Hysteria2 config"
+    if [ -f /code/scripts/generate_hysteria2_config.py ]; then
+        echo "Generating Hysteria2 config..."
+        python /code/scripts/generate_hysteria2_config.py 2>&1 || echo "WARNING: Failed to generate Hysteria2 config"
+    fi
 fi
 
+# ──────────────────────────────────────────────
+# 5. Миграции БД
+# ──────────────────────────────────────────────
+echo "Running alembic migrations..."
 alembic upgrade head
-exec uvicorn app.main:app --host "$UVICORN_HOST" --port "$UVICORN_PORT"
+
+# ──────────────────────────────────────────────
+# 6. Запуск uvicorn НАПРЯМУЮ (HTTP, SSL снаружи от Traefik)
+#    Минуем main.py как __main__, чтобы обойти проверку
+#    "нет SSL -> только localhost".
+# ──────────────────────────────────────────────
+echo "Starting Uvicorn on $UVICORN_HOST:$UVICORN_PORT ..."
+exec uvicorn main:app --host "$UVICORN_HOST" --port "$UVICORN_PORT"
 EOF
 
 RUN chmod +x /code/entrypoint.sh
-
 CMD ["/code/entrypoint.sh"]
