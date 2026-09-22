@@ -118,7 +118,11 @@ RUN echo "Build: ${BUILD_VERSION}"
 COPY . /code
 
 # Expose ports: Uvicorn(8000), Xray(various), Hysteria2(4443/udp), TUIC(18443/udp), Juicity(23182/udp)
-EXPOSE 8000 62050 62051 4443/udp 4443/tcp 18443/udp 18443/tcp 23182/udp 23182/tcp
+EXPOSE 3000/tcp \
+    2053/tcp 2083/tcp 2087/tcp 2096/tcp \
+    2082/tcp 2086/tcp 2084/tcp 2085/tcp \
+    1080/tcp 1080/udp \
+    4443/udp 18443/udp 23182/udp
 
 # Create marzban-cli symlink
 RUN ln -s /code/marzban-cli.py /usr/bin/marzban-cli \
